@@ -1,5 +1,5 @@
 ﻿// SPDX-License-Identifier: MIT
-// REPO: "OmniDoom — DOOM WAD autoload (PLAYPAL+COLORMAP) + DOOM Audio"
+// REPO: "OmniDoom — FreeDoom WAD autoload (PLAYPAL+COLORMAP) + DOOM Audio"
 // Author: Omniscye
 
 using HarmonyLib;
