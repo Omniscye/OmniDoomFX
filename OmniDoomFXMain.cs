@@ -1,5 +1,5 @@
 ﻿// SPDX-License-Identifier: MIT
-// REPO: "OmniDoom — FreeDoom WAD autoload (PLAYPAL+COLORMAP) + DOOM Audio"
+// REPO: "OmniDoom — DOOM WAD autoload (PLAYPAL+COLORMAP) + DOOM Audio"
 // Author: Omniscye
 
 using HarmonyLib;
@@ -308,7 +308,7 @@ namespace REPO.CursedGfx
         private static bool DoomifyFilterEnabled => DoomAudioManager.GlobalSfxEnabled;
     }
 
-    // ====== OmniDoom (DOOM palette only) + delayed flattening for enemies/valuables ======
+    // ====== OmniDoom (DOOM palette only) + flatten enemies/valuables ======
     public sealed class CursedGraphicsController : MonoBehaviour
     {
         public bool ModEnabled = false; // start OFF
@@ -701,9 +701,22 @@ namespace REPO.CursedGfx
             if (Input.GetKeyDown(KeyCode.F8))
             {
                 ModEnabled = !ModEnabled;
-                if (ModEnabled) InstallOverlay(); else { RestoreOverlay(); RestoreAllFlatified(); }
 
-                DoomAudioManager.Ensure().SetActive(ModEnabled);
+                if (ModEnabled)
+                {
+                    InstallOverlay();
+                    DoomAudioManager.Ensure().SetActive(true);
+
+                    // NEW: when toggled ON, re-flatten everything already in the scene
+                    StopAllCoroutines();
+                    StartCoroutine(ApplyFlatToExistingDelayed(0.15f));
+                }
+                else
+                {
+                    RestoreOverlay();
+                    RestoreAllFlatified();
+                    DoomAudioManager.Ensure().SetActive(false);
+                }
             }
             if (!ModEnabled) return;
 
@@ -756,13 +769,35 @@ namespace REPO.CursedGfx
             GUI.Label(r, txt, style);
         }
 
-        // ---------- Flatten cleanup ----------
+        // ---------- Flatten utilities ----------
         private void OnDisable() => RestoreAllFlatified();
 
         private void RestoreAllFlatified()
         {
             foreach (var m in UnityEngine.Object.FindObjectsByType<_FlatMarker>(FindObjectsSortMode.None))
                 FlatUtil.Restore(m.gameObject);
+        }
+
+        private IEnumerator ApplyFlatToExistingDelayed(float extraDelaySeconds)
+        {
+            // Wait long enough that anything mid‑spawn finishes init
+            yield return new WaitForEndOfFrame();
+            yield return new WaitForFixedUpdate();
+            if (extraDelaySeconds > 0f) yield return new WaitForSecondsRealtime(extraDelaySeconds);
+
+            if (!ModEnabled) yield break;
+
+            // Re‑flatten all currently active enemies & valuables
+            foreach (var e in UnityEngine.Object.FindObjectsByType<EnemyParent>(FindObjectsSortMode.None))
+            {
+                if (e && e.gameObject.activeInHierarchy)
+                    FlatUtil.TryFlatify(e.gameObject, 0.01f);
+            }
+            foreach (var v in UnityEngine.Object.FindObjectsByType<ValuableObject>(FindObjectsSortMode.None))
+            {
+                if (v && v.gameObject.activeInHierarchy)
+                    FlatUtil.TryFlatify(v.gameObject, 0.01f);
+            }
         }
     }
 
@@ -800,17 +835,14 @@ namespace REPO.CursedGfx
         }
     }
 
-    // ---------- Delayed flatten coroutines ----------
+    // ---------- Delayed flatten coroutines for spawn hooks ----------
     static class FlatDelay
     {
-        // Slightly longer than "just one frame": end-of-frame + one fixed update + tiny realtime wait
         public static IEnumerator WaitThenFlat(GameObject go, float depth, float extraSeconds = 0.10f)
         {
-            // ensure spawn systems/vision/state dicts are in place before touching transforms
             yield return new WaitForEndOfFrame();
             yield return new WaitForFixedUpdate();
             if (extraSeconds > 0f) yield return new WaitForSecondsRealtime(extraSeconds);
-
             if (go != null) FlatUtil.TryFlatify(go, depth);
         }
     }
@@ -820,7 +852,7 @@ namespace REPO.CursedGfx
     static class Patch_FlatEnemies_OnSpawn
     {
         private const float EnemyFlatDepth = 0.01f;
-        private const float EnemyExtraDelay = 0.15f; // "wait a tad longer"
+        private const float EnemyExtraDelay = 0.15f;
 
         static void Postfix(EnemyParent __instance)
         {
@@ -828,12 +860,11 @@ namespace REPO.CursedGfx
             var ctrl = UnityEngine.Object.FindFirstObjectByType<CursedGraphicsController>();
             if (ctrl == null || !ctrl.ModEnabled) return;
 
-            // delay flattening to avoid early physics/vision initialization races
             __instance.StartCoroutine(FlatDelay.WaitThenFlat(__instance.gameObject, EnemyFlatDepth, EnemyExtraDelay));
         }
     }
 
-    // Valuables: also delay a bit after Start
+    // Valuables: flatten with a short delay after Start
     [HarmonyPatch(typeof(ValuableObject), "Start")]
     static class Patch_FlatValuables_OnStart
     {
