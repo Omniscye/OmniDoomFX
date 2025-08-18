@@ -10,8 +10,7 @@ using System.IO;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
-
-// BepInEx shit
+// BepInEx
 using BepInEx;
 
 namespace REPO.CursedGfx
@@ -34,7 +33,7 @@ namespace REPO.CursedGfx
             _patched = true;
             _harmony = new Harmony("repo.cursedgfx.doom.autowad");
             _harmony.PatchAll(typeof(CursedGraphicsMod).Assembly);
-            Debug.Log("[CURSED GFX] Harmony patches applied.");
+            Debug.Log("[OmniDoom] Harmony patches applied.");
         }
 
         [HarmonyPostfix]
@@ -68,48 +67,40 @@ namespace REPO.CursedGfx
             if (__result == null) return;
             var go = __result.gameObject;
 
-            // 3D, no reverb blending from zones.
             __result.spatialBlend = 1f;
             __result.reverbZoneMix = 0f;
 
-            // Doom-ify chain (idempotent if already present):
             if (go.GetComponent<DoomifyFilter>() == null)
             {
                 var df = go.AddComponent<DoomifyFilter>();
-                df.enabled = DoomAudioManager.GlobalSfxEnabled; // follow global switch
+                df.enabled = DoomAudioManager.GlobalSfxEnabled;
             }
 
             var lp = go.GetComponent<AudioLowPassFilter>() ?? go.AddComponent<AudioLowPassFilter>();
-            lp.cutoffFrequency = 6000f; // Doom SFX top-end is modest
+            lp.cutoffFrequency = 6000f;
             var hp = go.GetComponent<AudioHighPassFilter>() ?? go.AddComponent<AudioHighPassFilter>();
-            hp.cutoffFrequency = 40f;   // trim sub-bass mud
+            hp.cutoffFrequency = 40f;
         }
     }
 
+    // ====== Single-track DOOM music loader/toggler ======
     public sealed class DoomAudioManager : MonoBehaviour
     {
         public static DoomAudioManager Instance { get; private set; }
         public static bool GlobalSfxEnabled = true; // F11 toggles SFX doomify
 
         private AudioSource _music;
-        private AudioClip _clip;     // single track (DoomMusic)
+        private AudioClip _clip; // DoomMusic
         private bool _active;
         private Coroutine _loader;
 
-        // Always point to BepInEx/plugins/Omniscye-DoomFX/Music (portable, no AppData) we ain't bitches
+        // Always BepInEx/plugins/Omniscye-DoomFX/Music (portable)
         private string MusicDir
         {
             get
             {
-                try
-                {
-                    return Path.Combine(Paths.PluginPath, "Omniscye-DoomFX", "Music");
-                }
-                catch
-                {
-                    // Fallback for non-BepInEx contexts (still portable next to game)
-                    return Path.Combine(Application.dataPath, "..", "plugins", "Omniscye-DoomFX", "Music");
-                }
+                try { return Path.Combine(Paths.PluginPath, "Omniscye-DoomFX", "Music"); }
+                catch { return Path.Combine(Application.dataPath, "..", "plugins", "Omniscye-DoomFX", "Music"); }
             }
         }
 
@@ -125,9 +116,9 @@ namespace REPO.CursedGfx
         private void Awake()
         {
             _music = gameObject.AddComponent<AudioSource>();
-            _music.loop = true;               // single track: just loop it when playing
+            _music.loop = true;
             _music.playOnAwake = false;
-            _music.spatialBlend = 0f;         // 2D music
+            _music.spatialBlend = 0f;
             _music.reverbZoneMix = 0f;
             _music.volume = 0.6f;
         }
@@ -151,7 +142,7 @@ namespace REPO.CursedGfx
             }
         }
 
-        // Single-song toggle: play/pause only
+        // Single-song toggle: play/pause
         public void ToggleMusic()
         {
             if (!_active)
@@ -170,7 +161,6 @@ namespace REPO.CursedGfx
             else
             {
                 if (_music.clip != _clip) _music.clip = _clip;
-                // If previously paused, UnPause resumes from position
                 if (_music.time > 0f && _music.time < _music.clip.length) _music.UnPause();
                 else _music.Play();
             }
@@ -189,10 +179,7 @@ namespace REPO.CursedGfx
             var baseDir = MusicDir;
             try { Directory.CreateDirectory(baseDir); } catch { }
 
-            // Preferred filename per request
             string chosen = Path.Combine(baseDir, "DoomMusic.mp3");
-
-            // Light fallback if you drop different encodings with same base name
             if (!File.Exists(chosen))
             {
                 var ogg = Path.Combine(baseDir, "DoomMusic.ogg");
@@ -203,7 +190,7 @@ namespace REPO.CursedGfx
 
             if (!File.Exists(chosen))
             {
-                Debug.Log($"[DOOM AUDIO] No music file found. Place 'DoomMusic.mp3' in: {baseDir}");
+                Debug.Log($"[OmniDoom] No music file found. Place 'DoomMusic.mp3' in: {baseDir}");
                 _loader = null;
                 yield break;
             }
@@ -221,7 +208,7 @@ namespace REPO.CursedGfx
                 if (req.isNetworkError || req.isHttpError)
 #endif
                 {
-                    Debug.LogWarning($"[DOOM AUDIO] Failed to load {chosen}: {req.error}");
+                    Debug.LogWarning($"[OmniDoom] Failed to load {chosen}: {req.error}");
                     _loader = null;
                     yield break;
                 }
@@ -233,7 +220,7 @@ namespace REPO.CursedGfx
                 }
                 catch (Exception e)
                 {
-                    Debug.LogWarning($"[DOOM AUDIO] Exception decoding {chosen}: {e.Message}");
+                    Debug.LogWarning($"[OmniDoom] Exception decoding {chosen}: {e.Message}");
                     _loader = null;
                     yield break;
                 }
@@ -263,16 +250,15 @@ namespace REPO.CursedGfx
 
     /// <summary>
     /// Lightweight DOOM-style SFX renderer:
-    /// - Downmixes to mono
-    /// - Resamples to ~11025 Hz using sample-and-hold
-    /// - 8-bit style quantization
-    /// - Optional soft drive
+    /// - Downmix to mono
+    /// - ~11025 Hz sample/hold
+    /// - 8-bit-ish quantization with soft drive
     /// </summary>
     public class DoomifyFilter : MonoBehaviour
     {
         [Range(8000f, 16000f)] public float targetSampleRate = 11025f;
-        [Range(0f, 24f)] public float preGainDb = 6f; // push into soft clip gently
-        [Range(0f, 1f)] public float drive = 0.15f;   // 0 = clean, 1 = max
+        [Range(0f, 24f)] public float preGainDb = 6f;
+        [Range(0f, 1f)] public float drive = 0.15f;
 
         private int _systemRate;
         private float _holdStep;
@@ -294,70 +280,48 @@ namespace REPO.CursedGfx
 
         private void OnAudioFilterRead(float[] data, int channels)
         {
-            if (!DoomAudioManager.GlobalSfxEnabled || channels <= 0) return;
+            if (!DoomifyFilterEnabled || channels <= 0) return;
 
             float pregain = Mathf.Pow(10f, preGainDb / 20f);
             for (int i = 0; i < data.Length; i += channels)
             {
-                // Downmix to mono
                 float m = 0f;
                 for (int c = 0; c < channels; c++) m += data[i + c];
                 m /= channels;
 
-                // Sample-hold to target rate
                 _holdCounter += 1f;
                 if (_holdCounter >= _holdStep)
                 {
                     _holdCounter = 0f;
-                    // 8-bit style quantization (signed)
+
                     float q = Mathf.Clamp(m * pregain, -1f, 1f);
-                    // Soft saturation before quantize
-                    if (drive > 0f)
-                    {
-                        // Smooth tanh drive
-                        q = (float)System.Math.Tanh(q * (1f + drive * 10f));
-                    }
-                    // Map [-1,1] -> [0,255] -> back to [-1,1]
+                    if (drive > 0f) q = (float)System.Math.Tanh(q * (1f + drive * 10f));
+
                     int q8 = Mathf.Clamp(Mathf.RoundToInt((q * 0.5f + 0.5f) * 255f), 0, 255);
                     _last = (q8 / 255f - 0.5f) * 2f;
                 }
 
-                for (int c = 0; c < channels; c++) data[i + c] = _last; // mono to all
+                for (int c = 0; c < channels; c++) data[i + c] = _last;
             }
         }
+
+        private static bool DoomifyFilterEnabled => DoomAudioManager.GlobalSfxEnabled;
     }
 
-    public enum CursedStyle
-    {
-        DOOM = 0,        // Uses real PLAYPAL+COLORMAP if found; else falls back to grade/posterize cause I can't trust fuck all
-        DMG_GREEN = 1,
-        DMG_GRAY = 2,
-        RGB_332 = 3,
-        NESISH = 4,
-    }
-
+    // ====== OmniDoom (DOOM palette only) + delayed flattening for enemies/valuables ======
     public sealed class CursedGraphicsController : MonoBehaviour
     {
-        // === Options ===
         public bool ModEnabled = false; // start OFF
-        public CursedStyle Style = CursedStyle.DOOM;
+
+        // DOOM palette lighting controls
+        [Range(0.25f, 4f)] public float DoomLightScale = 1.0f;  // ; / '
+        [Range(-1f, 1f)] public float DoomLightBias = 0.0f;    // , / .
+        public bool DoomLightByRow = true;
+        public bool Scanlines = true;
+        [Range(0, 2)] public int Sharpen = 1;
 
         [Range(64, 960)] public int TargetWidth = 320;
         [Range(64, 960)] public int TargetHeight = 200;
-
-        // Doom-ish fallback tuning
-        [Range(0, 2)] public int Sharpen = 1;
-        public bool Scanlines = true;
-        [Range(2, 8)] public int Posterize = 6;
-        [Range(0.5f, 1.5f)] public float Gamma = 0.9f;
-        [Range(0.5f, 1.5f)] public float Contrast = 1.2f;
-        [Range(0f, 1f)] public float Desaturate = 0.25f;
-        [Range(-0.25f, 0.25f)] public float WarmShift = 0.06f;
-
-        // DOOM palette lighting controls (when PLAYPAL/COLORMAP present)
-        [Range(0.25f, 4f)] public float DoomLightScale = 1.0f;  // ; / ' to tweak
-        [Range(-1f, 1f)] public float DoomLightBias = 0.0f;     // , / . to tweak
-        public bool DoomLightByRow = true;
 
         // Game refs
         private RenderTextureMain _rtm;
@@ -375,37 +339,12 @@ namespace REPO.CursedGfx
         private Color32[] _outBuffer;
         private RenderTexture _downscaleRT;
 
-        // Palettes / LUTs
+        // DOOM palette assets
         private bool _doomAssetsLoaded;
         private string _wadUsed = "";
-        private Color32[] _doomPalette;   // 256 colors
-        private byte[,] _colormap;        // [level, index] (use up to first 32 levels)
-        private int[] _rgbToIndexLUT;     // 32*32*32 mapping r5:g5:b5 => palette index
-
-        // Legacy helpers
-        private static readonly byte[] Bayer4x4 = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
-        private static readonly Color32[] DMG_GREEN =
-        {
-            new Color32(0x0F,0x38,0x0F,0xFF),
-            new Color32(0x30,0x62,0x30,0xFF),
-            new Color32(0x8B,0xAC,0x0F,0xFF),
-            new Color32(0x9B,0xBC,0x0F,0xFF),
-        };
-        private static readonly Color32[] DMG_GRAY =
-        {
-            new Color32(0x0D,0x0D,0x0D,0xFF),
-            new Color32(0x30,0x30,0x30,0xFF),
-            new Color32(0x8A,0x8A,0x8A,0xFF),
-            new Color32(0xC4,0xC4,0xC4,0xFF),
-        };
-        private static readonly Color32[] NESISH =
-        {
-            new Color32(84,84,84,255),  new Color32(0,30,116,255),  new Color32(8,76,196,255),
-            new Color32(48,50,236,255), new Color32(92,64,255,255), new Color32(172,50,50,255),
-            new Color32(228,92,16,255), new Color32(248,120,88,255),new Color32(56,160,0,255),
-            new Color32(0,168,0,255),   new Color32(0,168,88,255),  new Color32(252,160,68,255),
-            new Color32(216,200,0,255), new Color32(232,232,232,255),
-        };
+        private Color32[] _doomPalette; // 256
+        private byte[,] _colormap;      // [levels, 256]
+        private int[] _rgbToIndexLUT;   // 32*32*32
 
         private void Awake() => CursedGraphicsMod.Init();
 
@@ -422,44 +361,33 @@ namespace REPO.CursedGfx
             AllocateWorking(TargetWidth, TargetHeight);
             if (_gameOverlay != null) _originalGameTexture = _gameOverlay.texture;
 
-            TryLoadDoomAssets(); // auto-find WAD in Omniscye-DoomFX folder
-
-            // Ensure music manager exists
+            TryLoadDoomAssets();
             DoomAudioManager.Ensure();
 
             Debug.Log(_doomAssetsLoaded
-                ? $"[CURSED GFX] DOOM palette mode ACTIVE (from \"{_wadUsed}\"). Starts OFF."
-                : "[CURSED GFX] DOOM-ish fallback (no WAD with PLAYPAL+COLORMAP found). Starts OFF.");
+                ? $"[OmniDoom] DOOM palette ACTIVE (from \"{_wadUsed}\"). Starts OFF."
+                : "[OmniDoom] DOOM assets not found; effect will be inert.");
         }
 
         // --------- WAD auto-discovery (plugins/Omniscye-DoomFX) ---------
-
         private void TryLoadDoomAssets()
         {
             byte[] pp = null, cm = null;
 
-            // 1) Look in plugins/Omniscye-DoomFX/
             string baseDir = Path.Combine(Paths.PluginPath, "Omniscye-DoomFX");
             if (TryLoadFromPreferredNames(baseDir, out pp, out cm, out _wadUsed) ||
-                TryScanWadsInDir(baseDir, out pp, out cm, out _wadUsed))
+                TryScanWadsInDir(baseDir, out pp, out cm, out _wadUsed) ||
+                TryScanWadsInDir(Paths.PluginPath, out pp, out cm, out _wadUsed))
             {
                 ParseDoomLumps(pp, cm);
                 return;
             }
 
-            // 2) Fallback: scan the plugin root for ANY .wad (less strict)
-            if (TryScanWadsInDir(Paths.PluginPath, out pp, out cm, out _wadUsed))
-            {
-                ParseDoomLumps(pp, cm);
-                return;
-            }
-
-            // 3) Last resort: Resources/DOOM/*. (optional)
             var rPP = Resources.Load<TextAsset>("DOOM/PLAYPAL");
             var rCM = Resources.Load<TextAsset>("DOOM/COLORMAP");
             if (rPP != null && rCM != null)
             {
-                _wadUsed = "Resources/DOOM/* (no .wad)";
+                _wadUsed = "Resources/DOOM/*";
                 ParseDoomLumps(rPP.bytes, rCM.bytes);
                 return;
             }
@@ -472,27 +400,21 @@ namespace REPO.CursedGfx
             playpal = colormap = null; wadUsed = "";
             if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return false;
 
-            string[] candidates = new[]
+            string[] candidates =
             {
-                "freedm.wad", "freedoom.wad", "freedoom1.wad", "freedoom2.wad",
-                "doom.wad", "doom2.wad"
+                "freedm.wad","freedoom.wad","freedoom1.wad","freedoom2.wad",
+                "doom.wad","doom2.wad"
             };
 
             foreach (var name in candidates)
             {
                 string path = Path.Combine(dir, name);
                 if (File.Exists(path) && TryLoadFromWad(path, "PLAYPAL", "COLORMAP", out playpal, out colormap))
-                {
-                    wadUsed = Path.GetFileName(path);
-                    return true;
-                }
-                // case variants
+                { wadUsed = Path.GetFileName(path); return true; }
+
                 string up = Path.Combine(dir, name.ToUpperInvariant());
                 if (File.Exists(up) && TryLoadFromWad(up, "PLAYPAL", "COLORMAP", out playpal, out colormap))
-                {
-                    wadUsed = Path.GetFileName(up);
-                    return true;
-                }
+                { wadUsed = Path.GetFileName(up); return true; }
             }
             return false;
         }
@@ -509,10 +431,7 @@ namespace REPO.CursedGfx
             foreach (var path in wadFiles)
             {
                 if (TryLoadFromWad(path, "PLAYPAL", "COLORMAP", out playpal, out colormap))
-                {
-                    wadUsed = Path.GetFileName(path);
-                    return true;
-                }
+                { wadUsed = Path.GetFileName(path); return true; }
             }
             return false;
         }
@@ -525,13 +444,11 @@ namespace REPO.CursedGfx
                 using (var fs = new FileStream(wadPath, FileMode.Open, FileAccess.Read))
                 using (var br = new BinaryReader(fs))
                 {
-                    // Header
                     var ident = new string(br.ReadChars(4)); // "IWAD"/"PWAD"
                     int numLumps = br.ReadInt32();
                     int dirOfs = br.ReadInt32();
                     if (numLumps <= 0 || dirOfs <= 0) return false;
 
-                    // Directory
                     fs.Position = dirOfs;
                     long aOfs = 0, bOfs = 0; int aLen = 0, bLen = 0;
                     for (int i = 0; i < numLumps; i++)
@@ -550,7 +467,7 @@ namespace REPO.CursedGfx
             }
             catch (Exception e)
             {
-                Debug.LogWarning("[CURSED GFX] WAD read failed: " + e.Message);
+                Debug.LogWarning("[OmniDoom] WAD read failed: " + e.Message);
                 return false;
             }
         }
@@ -561,17 +478,15 @@ namespace REPO.CursedGfx
             {
                 if (pp == null || cm == null) { _doomAssetsLoaded = false; return; }
 
-                // PLAYPAL: 14*256*3 bytes (we use palette 0)
                 if (pp.Length < 14 * 256 * 3) { _doomAssetsLoaded = false; return; }
                 _doomPalette = new Color32[256];
-                int baseOff = 0; // palette 0
+                int baseOff = 0;
                 for (int i = 0; i < 256; i++)
                 {
                     int o = baseOff + i * 3;
                     _doomPalette[i] = new Color32(pp[o], pp[o + 1], pp[o + 2], 255);
                 }
 
-                // COLORMAP: usually 34 * 256 bytes; we’ll keep all levels but use 32 by default I think..
                 int levels = cm.Length / 256;
                 int useLevels = Mathf.Clamp(levels, 1, 34);
                 _colormap = new byte[useLevels, 256];
@@ -584,7 +499,7 @@ namespace REPO.CursedGfx
             }
             catch (Exception e)
             {
-                Debug.LogWarning("[CURSED GFX] Failed to parse DOOM lumps: " + e.Message);
+                Debug.LogWarning("[OmniDoom] Failed to parse DOOM lumps: " + e.Message);
                 _doomAssetsLoaded = false;
             }
         }
@@ -614,7 +529,6 @@ namespace REPO.CursedGfx
         }
 
         // ----------------- Main loop -----------------
-
         private void AllocateWorking(int w, int h)
         {
             if (_workTex != null) UnityEngine.Object.Destroy(_workTex);
@@ -642,7 +556,7 @@ namespace REPO.CursedGfx
         private void InstallOverlay()
         {
             if (_installedOverlay || _gameOverlay == null) return;
-            var go = new GameObject("CURSED Output", typeof(RectTransform), typeof(RawImage));
+            var go = new GameObject("OmniDoom Output", typeof(RectTransform), typeof(RawImage));
             var rt = go.GetComponent<RectTransform>();
             rt.SetParent(_gameOverlay.transform.parent, false);
             rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
@@ -672,7 +586,7 @@ namespace REPO.CursedGfx
 
         private void LateUpdate()
         {
-            if (!ModEnabled) return;
+            if (!ModEnabled || !_doomAssetsLoaded) return;
             if (_rtm?.renderTexture == null || _workTex == null) return;
             if (!_installedOverlay && _gameOverlay != null) InstallOverlay();
 
@@ -695,15 +609,7 @@ namespace REPO.CursedGfx
             var src = _workTex.GetPixels32();
             EnsureBuffers(src.Length);
 
-            if (Style == CursedStyle.DOOM && _doomAssetsLoaded)
-            {
-                ProcessDoomPalette(src, _outBuffer, w, h);
-            }
-            else
-            {
-                Array.Copy(src, _buffer, src.Length);
-                ProcessDoomish(_buffer, _outBuffer, w, h);
-            }
+            ProcessDoomPalette(src, _outBuffer, w, h);
 
             _workTex.SetPixels32(_outBuffer);
             _workTex.Apply(false, false);
@@ -718,7 +624,6 @@ namespace REPO.CursedGfx
         }
 
         // --- True DOOM palette path ---
-
         private void ProcessDoomPalette(Color32[] src, Color32[] dst, int w, int h)
         {
             int maxLevels = Math.Min(_colormap.GetLength(0), 32);
@@ -765,54 +670,6 @@ namespace REPO.CursedGfx
             }
         }
 
-        // --- Doom-ish fallback ---
-
-        private void ProcessDoomish(Color32[] src, Color32[] dst, int w, int h)
-        {
-            for (int i = 0; i < src.Length; i++)
-            {
-                var c = src[i];
-                float r = c.r / 255f, g = c.g / 255f, b = c.b / 255f;
-
-                float invG = 1f / Mathf.Max(0.0001f, Gamma);
-                r = Mathf.Pow(r, invG); g = Mathf.Pow(g, invG); b = Mathf.Pow(b, invG);
-
-                const float mid = 0.5f;
-                r = (r - mid) * Contrast + mid;
-                g = (g - mid) * Contrast + mid;
-                b = (b - mid) * Contrast + mid;
-
-                float luma = r * 0.299f + g * 0.587f + b * 0.114f;
-                r = Mathf.Lerp(r, luma, Desaturate);
-                g = Mathf.Lerp(g, luma, Desaturate);
-                b = Mathf.Lerp(b, luma, Desaturate);
-
-                r = Mathf.Clamp01(r + WarmShift * 0.9f);
-                g = Mathf.Clamp01(g + WarmShift * 0.3f);
-                b = Mathf.Clamp01(b - WarmShift * 0.6f);
-
-                src[i] = new Color32(
-                    (byte)Mathf.RoundToInt(r * 255f),
-                    (byte)Mathf.RoundToInt(g * 255f),
-                    (byte)Mathf.RoundToInt(b * 255f),
-                    255);
-            }
-
-            int lev = Mathf.Clamp(Posterize, 2, 8);
-            float step = 255f / (lev - 1);
-            for (int i = 0; i < src.Length; i++)
-            {
-                var c = src[i];
-                byte pr = (byte)(Mathf.Round(c.r / step) * step);
-                byte pg = (byte)(Mathf.Round(c.g / step) * step);
-                byte pb = (byte)(Mathf.Round(c.b / step) * step);
-                dst[i] = new Color32(pr, pg, pb, 255);
-            }
-
-            if (Scanlines) DarkenEveryOtherRow(dst, w, h, 0.75f);
-            if (Sharpen > 0) ApplySharpen(dst, w, h, Sharpen);
-        }
-
         private void ApplySharpen(Color32[] px, int w, int h, int strength)
         {
             var temp = _buffer;
@@ -839,38 +696,26 @@ namespace REPO.CursedGfx
         }
 
         // --- Input & GUI ---
-
         private void HandleHotkeys()
         {
             if (Input.GetKeyDown(KeyCode.F8))
             {
                 ModEnabled = !ModEnabled;
-                if (ModEnabled) InstallOverlay(); else RestoreOverlay();
+                if (ModEnabled) InstallOverlay(); else { RestoreOverlay(); RestoreAllFlatified(); }
 
-                // Music follows graphics master switch
                 DoomAudioManager.Ensure().SetActive(ModEnabled);
             }
             if (!ModEnabled) return;
-
-            if (Input.GetKeyDown(KeyCode.F9))
-            {
-                int next = ((int)Style + 1) % Enum.GetNames(typeof(CursedStyle)).Length;
-                Style = (CursedStyle)next;
-            }
-
-            if (Input.GetKeyDown(KeyCode.F7)) Scanlines = !Scanlines;
-
-            if (Input.GetKeyDown(KeyCode.LeftBracket)) Sharpen = Mathf.Clamp(Sharpen - 1, 0, 2);
-            if (Input.GetKeyDown(KeyCode.RightBracket)) Sharpen = Mathf.Clamp(Sharpen + 1, 0, 2);
-
-            if (Input.GetKeyDown(KeyCode.Minus)) Posterize = Mathf.Clamp(Posterize - 1, 2, 8);
-            if (Input.GetKeyDown(KeyCode.Equals)) Posterize = Mathf.Clamp(Posterize + 1, 2, 8);
 
             // DOOM palette light tweaks
             if (Input.GetKeyDown(KeyCode.Semicolon)) DoomLightScale = Mathf.Clamp(DoomLightScale * 0.9f, 0.25f, 4f);
             if (Input.GetKeyDown(KeyCode.Quote)) DoomLightScale = Mathf.Clamp(DoomLightScale * 1.1f, 0.25f, 4f);
             if (Input.GetKeyDown(KeyCode.Comma)) DoomLightBias = Mathf.Clamp(DoomLightBias - 0.05f, -1f, 1f);
             if (Input.GetKeyDown(KeyCode.Period)) DoomLightBias = Mathf.Clamp(DoomLightBias + 0.05f, -1f, 1f);
+
+            if (Input.GetKeyDown(KeyCode.F7)) Scanlines = !Scanlines;
+            if (Input.GetKeyDown(KeyCode.LeftBracket)) Sharpen = Mathf.Clamp(Sharpen - 1, 0, 2);
+            if (Input.GetKeyDown(KeyCode.RightBracket)) Sharpen = Mathf.Clamp(Sharpen + 1, 0, 2);
 
             if (Input.GetKeyDown(KeyCode.PageUp))
             {
@@ -893,31 +738,115 @@ namespace REPO.CursedGfx
 
         private void OnGUI()
         {
-            string mode = Style.ToString();
-            string hdr = (_doomAssetsLoaded && Style == CursedStyle.DOOM)
+            string hdr = (_doomAssetsLoaded)
                 ? $"OmniDoom (PLAYPAL from \"{_wadUsed}\")"
                 : "OmniDoom";
 
             string txt = ModEnabled
-                ? $"{hdr} — {mode} — {TargetWidth}x{TargetHeight}\n" +
-                  "[F8 toggle | F9 mode | F7 scanlines | [ ] sharpen | - = posterize | PgUp/PgDn res]\n" +
-                  (Style == CursedStyle.DOOM
-                     ? $"LightScale:{DoomLightScale:0.00} (;/')  LightBias:{DoomLightBias:+0.00;-0.00;0} (,/.)  RowLight:{(DoomLightByRow ? "ON" : "OFF")}\n"
-                     : "") +
+                ? $"{hdr} — {TargetWidth}x{TargetHeight}\n" +
+                  "[F8 toggle | F7 scanlines | [ ] sharpen | PgUp/PgDn res]\n" +
+                  $"LightScale:{DoomLightScale:0.00} (;/')  LightBias:{DoomLightBias:+0.00;-0.00;0} (,/.)  RowLight:{(DoomLightByRow ? "ON" : "OFF")}\n" +
                   "Audio: F10 music on/off | F11 SFX Doomify | F12 reload music"
                 : $"{hdr} — DISABLED (F8 to enable)";
 
-            var style = new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 12,
-                normal = { textColor = Color.black }
-            };
-
+            var style = new GUIStyle(GUI.skin.label) { fontSize = 12, normal = { textColor = Color.black } };
             Rect r = new Rect(10, 10, Screen.width, 80);
             GUI.Label(new Rect(r.x + 1, r.y + 1, r.width, r.height), txt, style);
-
             style.normal.textColor = Color.green;
             GUI.Label(r, txt, style);
+        }
+
+        // ---------- Flatten cleanup ----------
+        private void OnDisable() => RestoreAllFlatified();
+
+        private void RestoreAllFlatified()
+        {
+            foreach (var m in UnityEngine.Object.FindObjectsByType<_FlatMarker>(FindObjectsSortMode.None))
+                FlatUtil.Restore(m.gameObject);
+        }
+    }
+
+    // ====== Flatten helpers + patches ======
+    sealed class _FlatMarker : MonoBehaviour
+    {
+        public Dictionary<Transform, Vector3> original = new();
+    }
+
+    static class FlatUtil
+    {
+        public static void TryFlatify(GameObject root, float depth = 0.01f)
+        {
+            if (root == null) return;
+            var marker = root.GetComponent<_FlatMarker>() ?? root.AddComponent<_FlatMarker>();
+
+            foreach (var r in root.GetComponentsInChildren<Renderer>(true))
+            {
+                var t = r.transform;
+                if (!marker.original.ContainsKey(t))
+                    marker.original[t] = t.localScale;
+
+                var s = t.localScale;
+                t.localScale = new Vector3(s.x, s.y, Mathf.Max(depth, 0.0001f)); // flatten Z
+            }
+        }
+
+        public static void Restore(GameObject root)
+        {
+            var marker = root?.GetComponent<_FlatMarker>();
+            if (marker == null) return;
+            foreach (var kv in marker.original)
+                if (kv.Key) kv.Key.localScale = kv.Value;
+            UnityEngine.Object.Destroy(marker);
+        }
+    }
+
+    // ---------- Delayed flatten coroutines ----------
+    static class FlatDelay
+    {
+        // Slightly longer than "just one frame": end-of-frame + one fixed update + tiny realtime wait
+        public static IEnumerator WaitThenFlat(GameObject go, float depth, float extraSeconds = 0.10f)
+        {
+            // ensure spawn systems/vision/state dicts are in place before touching transforms
+            yield return new WaitForEndOfFrame();
+            yield return new WaitForFixedUpdate();
+            if (extraSeconds > 0f) yield return new WaitForSecondsRealtime(extraSeconds);
+
+            if (go != null) FlatUtil.TryFlatify(go, depth);
+        }
+    }
+
+    // Enemies: flatten after a safe delay post-spawn
+    [HarmonyPatch(typeof(EnemyParent), "SpawnRPC")]
+    static class Patch_FlatEnemies_OnSpawn
+    {
+        private const float EnemyFlatDepth = 0.01f;
+        private const float EnemyExtraDelay = 0.15f; // "wait a tad longer"
+
+        static void Postfix(EnemyParent __instance)
+        {
+            if (__instance == null) return;
+            var ctrl = UnityEngine.Object.FindFirstObjectByType<CursedGraphicsController>();
+            if (ctrl == null || !ctrl.ModEnabled) return;
+
+            // delay flattening to avoid early physics/vision initialization races
+            __instance.StartCoroutine(FlatDelay.WaitThenFlat(__instance.gameObject, EnemyFlatDepth, EnemyExtraDelay));
+        }
+    }
+
+    // Valuables: also delay a bit after Start
+    [HarmonyPatch(typeof(ValuableObject), "Start")]
+    static class Patch_FlatValuables_OnStart
+    {
+        private const float ValFlatDepth = 0.01f;
+        private const float ValExtraDelay = 0.10f;
+
+        static void Postfix(ValuableObject __instance)
+        {
+            if (__instance == null) return;
+            var ctrl = UnityEngine.Object.FindFirstObjectByType<CursedGraphicsController>();
+            if (ctrl == null || !ctrl.ModEnabled) return;
+
+            __instance.StartCoroutine(FlatDelay.WaitThenFlat(__instance.gameObject, ValFlatDepth, ValExtraDelay));
         }
     }
 }
