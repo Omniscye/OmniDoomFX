@@ -1,6 +1,6 @@
 # OmniDoom
 
-**DOOM-style graphics + audio for Unity games (BepInEx mod).**
+**DOOM-style graphics + audio for R.E.P.O (Unity Engine) (BepInEx mod).**
 Automatically loads `PLAYPAL`/`COLORMAP` from a DOOM WAD if present, applies a retro palette pipeline, and “doom-ifies” runtime SFX. Optional background music plays from a single track in your mod folder.
 
 ## Features
